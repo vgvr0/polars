@@ -1283,6 +1283,69 @@ def test_sort_by_dynamic_24057(expr: pl.Expr, result: list[list[int]]) -> None:
     assert_frame_equal(out, expected)
 
 
+@pytest.mark.parametrize("aggregation", ["min", "max", "sum"])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("maintain_order", [False, True])
+def test_sort_by_group_scalar_29583(
+    aggregation: str, descending: bool, maintain_order: bool
+) -> None:
+    df = pl.DataFrame(
+        {
+            "k": [0, 0, 0, 1, 2, 2],
+            "a": [10, 11, 12, 20, 30, 31],
+            "b": [3.0, 1.0, 2.0, 9.0, 5.0, 4.0],
+        }
+    )
+    by = getattr(pl.col("b"), aggregation)()
+    expr = pl.col("a").head(2).sort_by(by, descending=descending)
+
+    expected = [[10, 11], [20], [30, 31]]
+    assert (
+        df.group_by("k", maintain_order=maintain_order)
+        .agg(expr)
+        .sort("k")["a"]
+        .to_list()
+        == expected
+    )
+    assert (
+        df.lazy()
+        .group_by("k", maintain_order=maintain_order)
+        .agg(expr)
+        .sort("k")
+        .collect()["a"]
+        .to_list()
+        == expected
+    )
+
+
+def test_sort_by_group_scalar_with_row_key_29583() -> None:
+    df = pl.DataFrame(
+        {
+            "k": [0, 0, 0, 1, 1],
+            "a": [10, 11, 12, 20, 21],
+            "b": [1.0, 2.0, 9.0, 4.0, 3.0],
+            "c": [2, 0, 1, 1, 0],
+        }
+    )
+    out = df.group_by("k", maintain_order=True).agg(
+        pl.col("a").sort_by([pl.col("b").max(), pl.col("c")])
+    )
+    assert out["a"].to_list() == [[11, 12, 10], [21, 20]]
+
+
+def test_sort_by_group_scalar_over_29583() -> None:
+    df = pl.DataFrame(
+        {
+            "k": [0, 0, 0, 1, 1, 1],
+            "a": [10, 11, 12, 20, 21, 22],
+            "b": [1.0] * 6,
+        }
+    )
+    expected = df["a"].to_list()
+    out = df.select(pl.col("a").sort_by(pl.col("b").max()).over("k"))
+    assert out["a"].to_list() == expected
+
+
 def test_sort_by_empty_list_eval_25433() -> None:
     some_list = [2, 1, 3]
     df = pl.DataFrame({"a": [some_list, []]})

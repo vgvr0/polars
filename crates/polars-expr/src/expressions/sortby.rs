@@ -270,8 +270,10 @@ impl PhysicalExpr for SortByExpr {
         state: &ExecutionState,
     ) -> PolarsResult<AggregationContext<'a>> {
         let mut ac_in = self.input.evaluate_on_groups(df, groups, state)?;
-        let descending = prepare_bool_vec(&self.sort_options.descending, self.by.len());
-        let nulls_last = prepare_bool_vec(&self.sort_options.nulls_last, self.by.len());
+        let descending_options =
+            prepare_bool_vec(&self.sort_options.descending, self.by.len());
+        let nulls_last_options =
+            prepare_bool_vec(&self.sort_options.nulls_last, self.by.len());
 
         let mut ac_sort_by = self
             .by
@@ -311,6 +313,39 @@ impl PhysicalExpr for SortByExpr {
             }
         }
 
+        // An aggregated scalar has one value per group. It is constant for all
+        // rows in that group, so it must not be used as a row-indexed sort key.
+        // In particular, the groups attached to an AggregatedScalar are only
+        // placeholders and cannot be passed to `update_groups_sort_by`.
+        let (descending, nulls_last) = if ac_sort_by
+            .iter()
+            .any(|ac| matches!(&ac.state, AggState::AggregatedScalar(_)))
+        {
+            let mut sort_by_indices = (0..ac_sort_by.len()).collect::<Vec<_>>();
+            sort_by_indices
+                .retain(|&i| !matches!(&ac_sort_by[i].state, AggState::AggregatedScalar(_)));
+            if sort_by_indices.is_empty() {
+                return Ok(ac_in);
+            }
+
+            let descending = sort_by_indices
+                .iter()
+                .map(|&i| descending_options[i])
+                .collect::<Vec<_>>();
+            let nulls_last = sort_by_indices
+                .iter()
+                .map(|&i| nulls_last_options[i])
+                .collect::<Vec<_>>();
+            ac_sort_by = ac_sort_by
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, ac)| sort_by_indices.contains(&i).then_some(ac))
+                .collect();
+            (descending, nulls_last)
+        } else {
+            (descending_options, nulls_last_options)
+        };
+
         let mut sort_by_s = ac_sort_by
             .iter()
             // @scalar-opt
@@ -323,7 +358,7 @@ impl PhysicalExpr for SortByExpr {
             UpdateGroups::WithSeriesLen | UpdateGroups::WithGroupsLen
         );
 
-        let groups = if self.by.len() == 1 {
+        let groups = if ac_sort_by.len() == 1 {
             let mut ac_sort_by = ac_sort_by.pop().unwrap();
 
             // The groups of the lhs of the expressions do not match the series values,
