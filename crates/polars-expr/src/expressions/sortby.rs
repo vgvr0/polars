@@ -270,10 +270,8 @@ impl PhysicalExpr for SortByExpr {
         state: &ExecutionState,
     ) -> PolarsResult<AggregationContext<'a>> {
         let mut ac_in = self.input.evaluate_on_groups(df, groups, state)?;
-        let descending_options =
-            prepare_bool_vec(&self.sort_options.descending, self.by.len());
-        let nulls_last_options =
-            prepare_bool_vec(&self.sort_options.nulls_last, self.by.len());
+        let descending_options = prepare_bool_vec(&self.sort_options.descending, self.by.len());
+        let nulls_last_options = prepare_bool_vec(&self.sort_options.nulls_last, self.by.len());
 
         let mut ac_sort_by = self
             .by
